@@ -1,0 +1,107 @@
+basePath: /
+definitions:
+  handler.ProcessRequest:
+    properties:
+      limit:
+        maximum: 100
+        minimum: 1
+        type: integer
+      maxDelay:
+        type: integer
+      minDelay:
+        minimum: 0
+        type: integer
+      successRate:
+        maximum: 1
+        minimum: 0
+        type: number
+    required:
+    - limit
+    - successRate
+    type: object
+  handler.TaskListResponse:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/model.Task'
+        type: array
+      page:
+        type: integer
+      pageSize:
+        type: integer
+      total:
+        type: integer
+    type: object
+  model.Task:
+    properties:
+      createdAt:
+        type: string
+      errorMessage:
+        type: string
+      id:
+        type: integer
+      status:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: Конкурентный обработчик задач
+  title: Обработчик задач API
+  version: "1.0"
+paths:
+  /process:
+    post:
+      consumes:
+      - application/json
+      description: Отправляет задачи на выполнение
+      parameters:
+      - description: Параметры обработки
+        in: body
+        name: data
+        required: true
+        schema:
+          $ref: '#/definitions/handler.ProcessRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Запуск задач в работу
+  /tasks:
+    get:
+      consumes:
+      - application/json
+      description: Получает список задач с пагинацией и фильтрацией
+      parameters:
+      - description: Номер страницы
+        in: query
+        name: page
+        type: integer
+      - description: Размер страницы
+        in: query
+        name: pageSize
+        type: integer
+      - description: Фильтр по статусу (NEW, PROCESSING, PROCESSED, FAILED)
+        in: query
+        name: status
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.TaskListResponse'
+      summary: Список задач
+swagger: "2.0"
