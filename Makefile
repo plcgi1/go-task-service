@@ -13,10 +13,12 @@ LOG_PREFIX=[swagger]
 DB_URL=postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable
 SEED_DIR=seed
 
-run:
+.PHONY: help
+
+run: ## Запуск сервера
 	go run $(MAIN_FILE)
 
-seed-tasks:
+seed-tasks: ## Генерация задач в базу
 	@echo "[seed] 🚜 Заполняем таблицу 'task' 1000 записями..."
 	@psql $(DB_URL) -f $(SEED_DIR)/tasks.sql
 	@echo "[seed] ✅ Генерация завершена."
@@ -55,10 +57,10 @@ check-annotations:
 	@grep -q "@version" $(MAIN_FILE) || (echo "$(LOG_PREFIX) ⚠️ В $(MAIN_FILE) нет аннотации @version" && exit 1)
 	@grep -q "@description" $(MAIN_FILE) || (echo "$(LOG_PREFIX) ⚠️ В $(MAIN_FILE) нет аннотации @description" && exit 1)
 
-swag:
+swag: ## Генерация swagger
 	swag init -g cmd/main.go -d .
 
-migrate-up:
+migrate-up: ## Запуск миграции
 	migrate -source file://$(MIGRATIONS_DIR) -database "$(DB_URL)" -verbose up
 
 migrate-down:
