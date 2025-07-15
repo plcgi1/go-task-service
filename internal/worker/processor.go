@@ -42,8 +42,10 @@ func (p *Processor) worker(id int) {
 	for job := range p.Jobs {
 		logger.Log.Infof("[Worker %d] Task %d started", id, job.ID)
 
+		// проверяем количество допустимых повторных запусков одной задачи
 		if job.CountOfTryings >= p.CountOfTryings {
-			p.Repo.UpdateStatusTx(job.ID, string(model.StatusFailed), nil, job.CountOfTryings)
+			errorMessage := "Trying count exceeded"
+			p.Repo.UpdateStatusTx(job.ID, string(model.StatusFailed), &errorMessage, job.CountOfTryings)
 			workerLogger.
 				WithFields(logrus.Fields{"targetCountOfTryings": p.CountOfTryings, "jobId": job.ID, "countOfTryings": job.CountOfTryings}).
 				Warnf("Err with count of tryings - setting status to failed")

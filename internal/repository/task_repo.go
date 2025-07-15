@@ -1,12 +1,8 @@
 package repository
 
 import (
-	"fmt"
-
-	"go-task-service/config"
 	"go-task-service/internal/model"
 
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -20,7 +16,7 @@ func NewTaskRepo(db *gorm.DB) *TaskRepo {
 
 func (r *TaskRepo) GetNewTasks(limit int) []model.Task {
 	var tasks []model.Task
-	// Debug тоьлко для отладки
+	// хочу видеть и контролировать sql запросы
 	r.db.Debug().Where("status = ?", "NEW").Limit(limit).Find(&tasks)
 	return tasks
 }
@@ -28,7 +24,7 @@ func (r *TaskRepo) GetNewTasks(limit int) []model.Task {
 func (r *TaskRepo) UpdateStatusTx(id uint, status string, errorMessage *string, countOfTryings int) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		return tx.Model(&model.Task{}).
-			Debug().
+			Debug(). // хочу видеть и контролировать sql запросы
 			Where("id = ?", id).
 			Updates(map[string]interface{}{
 				"error_message":    errorMessage,
@@ -59,16 +55,4 @@ func (r *TaskRepo) GetTasks(page, pageSize int, status string) ([]model.Task, in
 	}
 
 	return tasks, total, nil
-}
-
-func InitDB(cfg *config.Config) *gorm.DB {
-	dsn := fmt.Sprintf(
-		"host=%s user=%s password=%s dbname=%s port=%d sslmode=disable",
-		cfg.DB.DBHost, cfg.DB.DBUser, cfg.DB.DBPassword, cfg.DB.DBName, cfg.DB.DBPort,
-	)
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		panic(err)
-	}
-	return db
 }
