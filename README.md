@@ -55,6 +55,8 @@ make run # старт сервера
 
 ### Makefile команды
 
+смотри Makefile 
+
 ## Docker запуск
 
 1. docker compose build
