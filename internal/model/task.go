@@ -13,7 +13,7 @@ const (
 
 type Task struct {
 	ID             uint   `gorm:"primaryKey"`
-	Status         string `gorm:"type:varchar(20);default:NEW"`
+	Status         string `gorm:"type:varchar(20);default:NEW;index"`
 	CountOfTryings int    `gorm:"column:count_of_tryings"`
 	ErrorMessage   string `gorm:"type:varchar(255)"`
 	CreatedAt      time.Time

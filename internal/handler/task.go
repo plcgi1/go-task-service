@@ -16,7 +16,7 @@ type TaskHandler struct {
 }
 
 func New(svc *service.TaskService, repo *repository.TaskRepo) *TaskHandler {
-	return &TaskHandler{svc, repo}
+	return &TaskHandler{svc: svc, repo: repo}
 }
 
 // @Summary Запуск задач в работу

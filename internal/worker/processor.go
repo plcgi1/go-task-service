@@ -1,10 +1,12 @@
 package worker
 
 import (
+	"context"
 	"math/rand"
 	"time"
 
 	"go-task-service/internal/logger"
+	"go-task-service/internal/metrics"
 	"go-task-service/internal/model"
 	"go-task-service/internal/repository"
 
@@ -23,13 +25,15 @@ type Processor struct {
 	Repo           *repository.TaskRepo
 	Jobs           chan TaskJob
 	CountOfTryings int
+	ctx            context.Context
 }
 
-func NewProcessor(repo *repository.TaskRepo, workers, countOfTryings int) *Processor {
+func NewProcessor(ctx context.Context, repo *repository.TaskRepo, workers, countOfTryings int) *Processor {
 	p := &Processor{
 		Repo:           repo,
 		Jobs:           make(chan TaskJob, 100),
 		CountOfTryings: countOfTryings,
+		ctx:            ctx,
 	}
 	for i := 0; i < workers; i++ {
 		go p.worker(i)
@@ -37,63 +41,134 @@ func NewProcessor(repo *repository.TaskRepo, workers, countOfTryings int) *Proce
 	return p
 }
 
+// TODO проверить код и использовать
+//
+//	func ProcessTask(ctx context.Context, repo *Repo, job TaskJob, workerID int) {
+//	   start := time.Now()
+//	   traceID := uuid.New().String()
+//	   ctx = context.WithValue(ctx, "traceID", traceID)
+//
+//	   log := logging.WithContext(ctx).WithField("taskID", job.ID)
+//
+//	   err := repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+//	       var task Task
+//	       if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+//	           Where("id = ? AND status = ?", job.ID, "NEW").
+//	           First(&task).Error; err != nil {
+//	           metrics.TaskLockFailed.Inc()
+//	           log.WithError(err).Warn("Cannot lock task")
+//	           return err
+//	       }
+//
+//	       if err := tx.Model(&task).Update("status", "PROCESSING").Error; err != nil {
+//	           return err
+//	       }
+//
+//	       select {
+//	       case <-ctx.Done():
+//	           log.Warn("Task cancelled during processing")
+//	           metrics.TaskCancelled.Inc()
+//	           return errors.New("shutdown")
+//	       default:
+//	           // Simulate processing
+//	           delay := rand.Intn(job.MaxDelay-job.MinDelay+1) + job.MinDelay
+//	           time.Sleep(time.Millisecond * time.Duration(delay))
+//
+//	           success := rand.Float64() < job.SuccessRate
+//	           newStatus := "PROCESSED"
+//	           if !success {
+//	               newStatus = "NEW"
+//	               metrics.TaskFailed.Inc()
+//	           } else {
+//	               metrics.TaskProcessed.Inc()
+//	           }
+//
+//	           return tx.Model(&task).Update("status", newStatus).Error
+//	       }
+//	   })
+//
+//	   metrics.TaskDuration.Observe(float64(time.Since(start).Milliseconds()))
+//	   if err != nil {
+//	       log.WithError(err).Error("Task failed")
+//	   }
+//	}
+
 func (p *Processor) worker(id int) {
-	workerLogger := logger.Log.WithFields(logrus.Fields{"component": "worker", "id": id})
+	workerLogger := logger.
+		WithContext(p.ctx).
+		WithFields(logrus.Fields{"component": "worker", "workerID": id})
 	for job := range p.Jobs {
-		logger.Log.Infof("[Worker %d] Task %d started", id, job.ID)
+		select {
+		case <-p.ctx.Done():
+			workerLogger.Warn("Task cancelled by shutdown")
+		default:
+			start := time.Now()
 
-		// проверяем количество допустимых повторных запусков одной задачи
-		if job.CountOfTryings >= p.CountOfTryings {
-			errorMessage := "Trying count exceeded"
-			p.Repo.UpdateStatusTx(job.ID, string(model.StatusFailed), &errorMessage, job.CountOfTryings)
+			ctx := context.WithValue(p.ctx, "traceID", job.ID)
+			ctx = context.WithValue(ctx, "workerID", id)
+
+			workerLogger.Infof("[Worker %d] Task %d started", id, job.ID)
+			// проверяем количество допустимых повторных запусков одной задачи
+			if job.CountOfTryings >= p.CountOfTryings {
+				errorMessage := "Trying count exceeded"
+				p.Repo.UpdateStatusTx(job.ID, string(model.StatusFailed), &errorMessage, job.CountOfTryings)
+				workerLogger.
+					WithFields(logrus.Fields{"targetCountOfTryings": p.CountOfTryings, "jobId": job.ID, "countOfTryings": job.CountOfTryings}).
+					Warnf("Err with count of tryings - setting status to failed")
+				continue
+			}
+
+			if job.MaxDelay > 0 {
+				delay := rand.Intn(job.MaxDelay-job.MinDelay+1) + job.MinDelay
+				time.Sleep(time.Millisecond * time.Duration(delay))
+				workerLogger.
+					WithFields(logrus.Fields{"delay": delay, "jobId": job.ID}).
+					Warnf("Sleeping")
+			}
+
+			if err := p.Repo.UpdateStatusTx(job.ID, string(model.StatusProcessing), nil, job.CountOfTryings); err != nil {
+				// тут и алерты накидать куданить в sentry или еще куда
+				workerLogger.
+					WithFields(logrus.Fields{"status": model.StatusProcessing, "jobId": job.ID}).
+					WithError(err).
+					Warnf("Error updating task")
+				continue
+			}
+
 			workerLogger.
-				WithFields(logrus.Fields{"targetCountOfTryings": p.CountOfTryings, "jobId": job.ID, "countOfTryings": job.CountOfTryings}).
-				Warnf("Err with count of tryings - setting status to failed")
-			continue
-		}
+				WithFields(logrus.Fields{"jobId": job.ID, "status": model.StatusProcessing}).
+				Infof("[Worker] Task processing")
 
-		if job.MaxDelay > 0 {
-			delay := rand.Intn(job.MaxDelay-job.MinDelay+1) + job.MinDelay
-			time.Sleep(time.Millisecond * time.Duration(delay))
+			finalStatus, err := doSomeTaskWork(job, workerLogger)
+
+			if err != nil {
+				workerLogger.
+					WithFields(logrus.Fields{"jobId": job.ID, "status": finalStatus}).
+					WithError(err).
+					Warnf("Error in execution for task")
+				continue
+			}
+
+			err = p.Repo.UpdateStatusTx(job.ID, string(finalStatus), nil, job.CountOfTryings+1)
+			if err != nil {
+				workerLogger.
+					WithFields(logrus.Fields{"jobId": job.ID, "status": finalStatus}).
+					WithError(err).
+					Warnf("Error in UpdateStatusTx for task")
+				continue
+			}
+			duration := time.Since(start).Milliseconds()
+			metrics.TaskDuration.Observe(float64(duration))
+
 			workerLogger.
-				WithFields(logrus.Fields{"delay": delay, "jobId": job.ID}).
-				Warnf("Sleeping")
+				WithFields(logrus.Fields{
+					"jobId":       job.ID,
+					"status":      finalStatus,
+					"duration_ms": duration,
+				}).
+				Infof("[Worker] Task completed")
+
 		}
-
-		if err := p.Repo.UpdateStatusTx(job.ID, string(model.StatusProcessing), nil, job.CountOfTryings); err != nil {
-			// тут и алерты накидать куданить в sentry или еще куда
-			workerLogger.
-				WithFields(logrus.Fields{"status": model.StatusProcessing, "jobId": job.ID}).
-				WithError(err).
-				Warnf("Error updating task")
-			continue
-		}
-
-		workerLogger.
-			WithFields(logrus.Fields{"jobId": job.ID, "status": model.StatusProcessing}).
-			Infof("[Worker] Task processing")
-
-		finalStatus, err := doSomeTaskWork(job, workerLogger)
-
-		if err != nil {
-			workerLogger.
-				WithFields(logrus.Fields{"jobId": job.ID, "status": finalStatus}).
-				WithError(err).
-				Warnf("Error in execution for task")
-			continue
-		}
-
-		err = p.Repo.UpdateStatusTx(job.ID, string(finalStatus), nil, job.CountOfTryings+1)
-		if err != nil {
-			workerLogger.
-				WithFields(logrus.Fields{"jobId": job.ID, "status": finalStatus}).
-				WithError(err).
-				Warnf("Error in UpdateStatusTx for task")
-			continue
-		}
-		workerLogger.
-			WithFields(logrus.Fields{"jobId": job.ID, "status": finalStatus}).
-			Infof("[Worker] Task completed")
 	}
 }
 

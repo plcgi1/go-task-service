@@ -77,3 +77,6 @@ build:
 
 clean:
 	rm -f $(APP_NAME)
+
+install:
+	go mod tidy

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+
 	"go-task-service/config"
 	"go-task-service/internal/repository"
 	"go-task-service/internal/worker"
@@ -12,10 +14,10 @@ type TaskService struct {
 	Config    *config.Config
 }
 
-func NewTaskService(repo *repository.TaskRepo, cfg *config.Config) *TaskService {
+func NewTaskService(ctx context.Context, repo *repository.TaskRepo, cfg *config.Config) *TaskService {
 	return &TaskService{
 		Repo:      repo,
-		Processor: worker.NewProcessor(repo, 5, cfg.CountOfTryings),
+		Processor: worker.NewProcessor(ctx, repo, 5, cfg.CountOfTryings),
 	}
 }
 
